@@ -21,10 +21,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe.addWin32ResourceFile(.{
-        .file = b.path("oledSaverWin.rc"),
-        .flags = &.{ "/D_UNICODE", "/DUNICODE" },
-    });
     exe.subsystem = .Windows;
     //    exe.linkLibCpp();
     exe.linkSystemLibrary("user32");
