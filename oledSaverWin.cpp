@@ -16,6 +16,7 @@ HINSTANCE hInst; // current instance
 
 static LPCWSTR szWindowClass = L"oledSaverWinClass";
 static LPCWSTR szWindowTitle = L"oledSaverWin";
+static const int nAlphaValue = 240;
 
 // Forward declarations of functions included in this code module:
 ATOM MyRegisterClass(HINSTANCE hInstance);
@@ -84,7 +85,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (!hWnd)
 		return FALSE;
 
-	SetLayeredWindowAttributes(hWnd, 0, 240, LWA_ALPHA);
+	SetLayeredWindowAttributes(hWnd, 0, nAlphaValue, LWA_ALPHA);
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
