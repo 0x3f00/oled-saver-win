@@ -9,20 +9,19 @@
 //  Windows Header Files:
 #include <windows.h>
 
-
 #include "resource.h"
 
 // Global Variables:
 HINSTANCE hInst; // current instance
 
 static LPCWSTR szWindowClass = L"oledSaverWinClass";
+static LPCWSTR szWindowTitle = L"oledSaverWin";
 
 // Forward declarations of functions included in this code module:
 ATOM MyRegisterClass(HINSTANCE hInstance);
 BOOL InitInstance(HINSTANCE, int);
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-void OnFullScreen(HWND hwnd, int x, int y, UINT keyFlags);
-
+void FullscreenHandler(HWND hwnd, WPARAM wParam);
 
 int APIENTRY WinMain(HINSTANCE hInstance,
 					 HINSTANCE hPrevInstance,
@@ -32,11 +31,8 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 	UNREFERENCED_PARAMETER(hPrevInstance);
 	UNREFERENCED_PARAMETER(lpCmdLine);
 
-	// TODO: Place code here.
 	MSG msg;
-	HACCEL hAccelTable;
 
-	// Initialize global strings
 	MyRegisterClass(hInstance);
 
 	// Perform application initialization:
@@ -55,19 +51,6 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 	return (int)msg.wParam;
 }
 
-//
-//  FUNCTION: MyRegisterClass()
-//
-//  PURPOSE: Registers the window class.
-//
-//  COMMENTS:
-//
-//    This function and its usage are only necessary if you want this code
-//    to be compatible with Win32 systems prior to the 'RegisterClassEx'
-//    function that was added to Windows 95. It is important to call this function
-//    so that the application will get 'well formed' small icons associated
-//    with it.
-//
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
 	WNDCLASSEX wcex;
@@ -89,23 +72,13 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 	return RegisterClassEx(&wcex);
 }
 
-//
-//   FUNCTION: InitInstance(HINSTANCE, int)
-//
-//   PURPOSE: Saves instance handle and creates main window
-//
-//   COMMENTS:
-//
-//        In this function, we save the instance handle in a global variable and
-//        create and display the main program window.
-//
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
 	HWND hWnd;
 
 	hInst = hInstance; // Store instance handle in our global variable
 
-	hWnd = CreateWindowEx(WS_EX_LAYERED | WS_EX_APPWINDOW, szWindowClass, L"", WS_POPUP,
+	hWnd = CreateWindowEx(WS_EX_LAYERED | WS_EX_APPWINDOW, szWindowClass, szWindowTitle, WS_POPUP,
 						  CW_USEDEFAULT, CW_USEDEFAULT, 600, 400, NULL, NULL, hInstance, NULL);
 
 	if (!hWnd)
@@ -115,138 +88,207 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
-	//   OnFullScreen(hWnd, 0, 0, 0);
+	//	FullscreenHandler(hWnd, VK_RETURN);	// emulate enter hit
 
 	return TRUE;
 }
 
-WINDOWPLACEMENT g_wpPrev = {sizeof(g_wpPrev)};
-
-BOOL isFullscreen = FALSE;
-
-void OnFullScreen(HWND hwnd, int x, int y, UINT keyFlags)
+enum DragResizeEvent
 {
+	dreStart = 0,
+	dreStop,
+	dreMove,
+	dreFullscreenOn,
+	dreFullscreenOff,
+};
+
+void DragHandler(HWND hwnd, DragResizeEvent event)
+{
+	static bool isFullscreen = false;
+	static bool isDragging = false;
+	static POINT dragStartPos = {};
+	static POINT windowStartPos = {};
+
+	if (dreStop == event)
+	{
+		isDragging = false;
+		return;
+	}
+	else if (dreFullscreenOn == event)
+	{
+		isFullscreen = true;
+		return;
+	}
+	else if (dreFullscreenOff == event)
+	{
+		isFullscreen = false;
+		return;
+	}
+	else if (dreStart == event)
+	{
+		if (isFullscreen)
+			return;
+
+		short shiftState = GetKeyState(VK_SHIFT);
+		short controlState = GetKeyState(VK_CONTROL);
+		if ((shiftState & 0x8000) || (controlState & 0x8000))
+			return; // shift or control -> resizing, not dragging
+
+		isDragging = true;
+		GetCursorPos(&dragStartPos);
+		RECT rect;
+		GetWindowRect(hwnd, &rect);
+		windowStartPos.x = rect.left;
+		windowStartPos.y = rect.top;
+		return;
+	}
+	else if (dreMove == event)
+	{
+		if (!isDragging)
+			return;
+
+		POINT dragPos = {};
+		GetCursorPos(&dragPos);
+		// move window
+		int newX = dragPos.x - dragStartPos.x + windowStartPos.x;
+		int newY = dragPos.y - dragStartPos.y + windowStartPos.y;
+		SetWindowPos(hwnd, NULL, newX, newY, 0, 0, SWP_NOSIZE);
+		return;
+	}
+}
+
+void ResizeHandler(HWND hwnd, DragResizeEvent event)
+{
+	static bool isFullscreen = false;
+	static bool isResizing = false;
+	static POINT dragStartPos = {};
+	static POINT windowStartSize = {};
+
+	if (dreStop == event)
+	{
+		isResizing = false;
+		return;
+	}
+	else if (dreFullscreenOn == event)
+	{
+		isFullscreen = true;
+		return;
+	}
+	else if (dreFullscreenOff == event)
+	{
+		isFullscreen = false;
+		return;
+	}
+	else if (dreStart == event)
+	{
+		if (isFullscreen)
+			return;
+
+		short shiftState = GetKeyState(VK_SHIFT);
+		short controlState = GetKeyState(VK_CONTROL);
+		if (!(shiftState & 0x8000) && !(controlState & 0x8000))
+			return; // no shift or control -> dragging, not resizing
+
+		isResizing = true;
+		GetCursorPos(&dragStartPos);
+		RECT rect;
+		GetWindowRect(hwnd, &rect);
+		windowStartSize.x = rect.right - rect.left;
+		windowStartSize.y = rect.bottom - rect.top;
+		return;
+	}
+	else if (dreMove == event)
+	{
+		if (!isResizing)
+			return;
+
+		POINT dragPos = {};
+		GetCursorPos(&dragPos);
+		// resize window
+		int newWidth = dragPos.x - dragStartPos.x + windowStartSize.x;
+		if (newWidth < 100)
+			newWidth = 100;
+		int newHeight = dragPos.y - dragStartPos.y + windowStartSize.y;
+		if (newHeight < 100)
+			newHeight = 100;
+		SetWindowPos(hwnd, HWND_TOP, 0, 0, newWidth, newHeight, SWP_NOZORDER | SWP_NOMOVE);
+	}
+}
+
+void FullscreenHandler(HWND hwnd, WPARAM wParam)
+{
+	static bool isFullscreen = false;
+	static WINDOWPLACEMENT wpPrev = {sizeof(wpPrev)};
+
+	// handle escape and enter keys only
+	if ((VK_RETURN != wParam) && (VK_ESCAPE != wParam))
+		return;
+
+	if ((VK_ESCAPE == wParam) && !isFullscreen)
+	{
+		// if not full screen, then close window
+		PostMessage(hwnd, WM_CLOSE, 0, 0);
+		return;
+	}
+
+	// otherwise, toggle
 	if (!isFullscreen)
 	{
 		MONITORINFO mi = {sizeof(mi)};
-		if (GetWindowPlacement(hwnd, &g_wpPrev) && GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi))
-		{
-			SetWindowPos(hwnd, HWND_TOP,
-						 mi.rcMonitor.left, mi.rcMonitor.top,
-						 mi.rcMonitor.right - mi.rcMonitor.left,
-						 mi.rcMonitor.bottom - mi.rcMonitor.top,
-						 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-		}
+		if (!GetWindowPlacement(hwnd, &wpPrev) || !GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi))
+			return;
+
+		SetWindowPos(hwnd, HWND_TOP,
+					 mi.rcMonitor.left, mi.rcMonitor.top,
+					 mi.rcMonitor.right - mi.rcMonitor.left,
+					 mi.rcMonitor.bottom - mi.rcMonitor.top,
+					 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
 		// and hide mouse coursor
 		ShowCursor(false);
-		isFullscreen = TRUE;
+		isFullscreen = true;
+		DragHandler(hwnd, dreFullscreenOn);
+		ResizeHandler(hwnd, dreFullscreenOn);
 	}
 	else
 	{
-		SetWindowPlacement(hwnd, &g_wpPrev);
+		SetWindowPlacement(hwnd, &wpPrev);
 		SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
 					 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
 						 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 		ShowCursor(true);
-		isFullscreen = FALSE;
+		isFullscreen = false;
+		DragHandler(hwnd, dreFullscreenOff);
+		ResizeHandler(hwnd, dreFullscreenOff);
 	}
 }
 
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE:  Processes messages for the main window.
-//
-//  WM_COMMAND	- process the application menu
-//  WM_PAINT	- Paint the main window
-//  WM_DESTROY	- post a quit message and return
-//
-//
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	PAINTSTRUCT ps;
 	HDC hdc;
 
-	static BOOL isDragging = FALSE;
-	static BOOL isResizing = FALSE;
-	static POINT dragStartPos = {};
-	static POINT dragOffset = {};
-	static SIZE sizeStart = {};
-
 	switch (message)
 	{
-		//	case WM_CREATE:
-		//	{
-		//		HICON hIcon = LoadIcon(NULL, IDI_WINLOGO);
-		//		SendMessage(hWnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
-		//		SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
-		//	}
-		//	break;
 	case WM_LBUTTONDBLCLK:
-		OnFullScreen(hWnd, 0, 0, 0);
+		FullscreenHandler(hWnd, VK_RETURN); // emulate enter hit
 		break;
-	case WM_KEYDOWN: // on escape
-		if (wParam == VK_ESCAPE)
-		{
-			// if not full screen, then minimize
-			if (!isFullscreen)
-				ShowWindow(hWnd, SW_MINIMIZE);
-			else
-				OnFullScreen(hWnd, 0, 0, 0);
-		}
-		else if (wParam == VK_RETURN)
-		{
-			OnFullScreen(hWnd, 0, 0, 0);
-		}
+	case WM_KEYDOWN:
+		FullscreenHandler(hWnd, wParam);
 		break;
 	case WM_LBUTTONDOWN:
-	{
-		isDragging = TRUE;
-		// if shift is pressed, then resize
-		short shiftState = GetKeyState(VK_SHIFT);
-		short controlState = GetKeyState(VK_CONTROL);
-		if ((shiftState & 0x8000) || (controlState & 0x8000))
-			isResizing = TRUE;
-		dragStartPos.x = LOWORD(lParam);
-		dragStartPos.y = HIWORD(lParam);
-		// client to screen
-		ClientToScreen(hWnd, &dragStartPos);
-		RECT rect;
-		GetWindowRect(hWnd, &rect);
-		dragOffset.x = rect.left;
-		dragOffset.y = rect.top;
-		sizeStart.cx = rect.right - rect.left;
-		sizeStart.cy = rect.bottom - rect.top;
-	}
-	break;
+		SetCapture(hWnd);
+		DragHandler(hWnd, dreStart);
+		ResizeHandler(hWnd, dreStart);
+		break;
 	case WM_LBUTTONUP:
-		isDragging = FALSE;
-		isResizing = FALSE;
+		ReleaseCapture();
+		DragHandler(hWnd, dreStop);
+		ResizeHandler(hWnd, dreStop);
 		break;
 	case WM_MOUSEMOVE:
-		if (isDragging && !isFullscreen)
-		{
-			POINT dragPos = {};
-			dragPos.x = LOWORD(lParam);
-			dragPos.y = HIWORD(lParam);
-			// client to screen
-			ClientToScreen(hWnd, &dragPos);
-
-			if (isResizing)
-			{
-				int newWidth = dragPos.x - dragStartPos.x + sizeStart.cx;
-				int newHeight = dragPos.y - dragStartPos.y + sizeStart.cy;
-				SetWindowPos(hWnd, HWND_TOP, dragOffset.x, dragOffset.y, newWidth, newHeight, SWP_NOZORDER);
-			}
-			else
-			{
-				// move window
-				int newX = dragPos.x - dragStartPos.x + dragOffset.x;
-				int newY = dragPos.y - dragStartPos.y + dragOffset.y;
-				// move
-				SetWindowPos(hWnd, HWND_TOP, newX, newY, 0, 0, SWP_NOSIZE);
-			}
-		}
+		DragHandler(hWnd, dreMove);
+		ResizeHandler(hWnd, dreMove);
 		break;
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
