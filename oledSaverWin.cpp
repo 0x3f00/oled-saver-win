@@ -11,6 +11,14 @@
 
 #include "resource.h"
 
+#ifndef GET_X_LPARAM
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#endif // GET_X_LPARAM
+
+#ifndef GET_Y_LPARAM
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+#endif // GET_Y_LPARAM
+
 // Global Variables:
 HINSTANCE hInst; // current instance
 
@@ -280,6 +288,73 @@ void FullscreenHandler(HWND hwnd, WPARAM wParam)
 	}
 }
 
+void ContextMenuHandler(HWND hWnd, LPARAM lParam)
+{
+	ShowCursor(true);
+	HMENU hMenu = CreatePopupMenu();
+	if (!hMenu)
+		return;
+
+	OledSaverWinState *me = (OledSaverWinState *)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+	bool isFullscreen = me && me->isFullscreen;
+	AppendMenu(hMenu, MF_STRING | (isFullscreen ? MF_CHECKED : MF_UNCHECKED), IDM_FULLSCREEN, L"Fullscreen\tEnter");
+	AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
+	AppendMenu(hMenu, MF_STRING, IDM_MINIMIZE, L"Minimize\tEscape");
+	AppendMenu(hMenu, MF_STRING, IDM_DISPLAYOFF, L"Display Off\tPgDn");
+	AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
+	AppendMenu(hMenu, MF_STRING, IDM_EXIT, L"Exit\tAlt+F4");
+
+	// Get cursor position for the context menu
+	POINT pt;
+	if (GET_X_LPARAM(lParam) == -1 && GET_Y_LPARAM(lParam) == -1)
+	{
+		// Menu was triggered via keyboard - center in window
+		RECT rc;
+		GetClientRect(hWnd, &rc);
+		pt.x = (rc.right - rc.left) / 2;
+		pt.y = (rc.bottom - rc.top) / 2;
+		ClientToScreen(hWnd, &pt);
+	}
+	else
+	{
+		// Menu was triggered via mouse - use cursor position
+		pt.x = GET_X_LPARAM(lParam);
+		pt.y = GET_Y_LPARAM(lParam);
+	}
+
+	// Show the context menu
+	int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+							 pt.x, pt.y, 0, hWnd, NULL);
+	ShowCursor(false);
+
+	// Process the selected command
+	switch (cmd)
+	{
+	case IDM_FULLSCREEN:
+		// Handle fullscreen toggle
+		FullscreenHandler(hWnd, VK_RETURN);
+		break;
+
+	case IDM_MINIMIZE:
+		// Minimize window
+		ShowWindow(hWnd, SW_MINIMIZE);
+		break;
+
+	case IDM_DISPLAYOFF:
+		// Turn off display
+		SetTimer(hWnd, nIdOffTimer, 1 * 1000, NULL);
+		break;
+
+	case IDM_EXIT:
+		// Exit application
+		PostMessage(hWnd, WM_CLOSE, 0, 0);
+		break;
+	}
+
+	// Clean up
+	DestroyMenu(hMenu);
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	PAINTSTRUCT ps;
@@ -308,6 +383,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_MOUSEMOVE:
 		DragHandler(hWnd, dreMove);
 		ResizeHandler(hWnd, dreMove);
+		break;
+	case WM_CONTEXTMENU:
+		ContextMenuHandler(hWnd, lParam);
 		break;
 	case WM_TIMER:
 	{
