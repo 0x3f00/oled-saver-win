@@ -17,10 +17,23 @@ HINSTANCE hInst; // current instance
 static LPCWSTR szWindowClass = L"oledSaverWinClass";
 static LPCWSTR szWindowTitle = L"oledSaverWin";
 static const int nAlphaValue = 240;
+static const int nIdOffTimer = 42;
+
+struct OledSaverWinState
+{
+	bool isFullscreen{false};
+	WINDOWPLACEMENT wpPrev{sizeof(wpPrev)};
+	bool isResizing{false};
+	bool isDragging{false};
+	POINT dragStartPos{};
+	POINT windowStartPos{};
+	POINT windowStartSize{};
+	int offTimeout{0};
+};
 
 // Forward declarations of functions included in this code module:
 ATOM MyRegisterClass(HINSTANCE hInstance);
-BOOL InitInstance(HINSTANCE, int);
+BOOL InitInstance(HINSTANCE, int, OledSaverWinState *);
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 void FullscreenHandler(HWND hwnd, WPARAM wParam);
 
@@ -33,11 +46,12 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 	UNREFERENCED_PARAMETER(lpCmdLine);
 
 	MSG msg;
+	OledSaverWinState osws;
 
 	MyRegisterClass(hInstance);
 
 	// Perform application initialization:
-	if (!InitInstance(hInstance, nCmdShow))
+	if (!InitInstance(hInstance, nCmdShow, &osws))
 	{
 		return FALSE;
 	}
@@ -73,9 +87,11 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 	return RegisterClassEx(&wcex);
 }
 
-BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+BOOL InitInstance(HINSTANCE hInstance, int nCmdShow, OledSaverWinState *pWindowState)
 {
 	HWND hWnd;
+	if (!pWindowState)
+		return FALSE;
 
 	hInst = hInstance; // Store instance handle in our global variable
 
@@ -85,11 +101,16 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	if (!hWnd)
 		return FALSE;
 
+	SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pWindowState);
+
 	SetLayeredWindowAttributes(hWnd, 0, nAlphaValue, LWA_ALPHA);
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
 	//	FullscreenHandler(hWnd, VK_RETURN);	// emulate enter hit
+
+	DWORD style = GetWindowLong(hWnd, GWL_STYLE);
+	SetWindowLong(hWnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
 
 	return TRUE;
 }
@@ -99,35 +120,24 @@ enum DragResizeEvent
 	dreStart = 0,
 	dreStop,
 	dreMove,
-	dreFullscreenOn,
-	dreFullscreenOff,
+	//	dreFullscreenOn,
+	//	dreFullscreenOff,
 };
 
 void DragHandler(HWND hwnd, DragResizeEvent event)
 {
-	static bool isFullscreen = false;
-	static bool isDragging = false;
-	static POINT dragStartPos = {};
-	static POINT windowStartPos = {};
+	OledSaverWinState *me = (OledSaverWinState *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	if (!me)
+		return;
 
 	if (dreStop == event)
 	{
-		isDragging = false;
-		return;
-	}
-	else if (dreFullscreenOn == event)
-	{
-		isFullscreen = true;
-		return;
-	}
-	else if (dreFullscreenOff == event)
-	{
-		isFullscreen = false;
+		me->isDragging = false;
 		return;
 	}
 	else if (dreStart == event)
 	{
-		if (isFullscreen)
+		if (me->isFullscreen)
 			return;
 
 		short shiftState = GetKeyState(VK_SHIFT);
@@ -135,24 +145,24 @@ void DragHandler(HWND hwnd, DragResizeEvent event)
 		if ((shiftState & 0x8000) || (controlState & 0x8000))
 			return; // shift or control -> resizing, not dragging
 
-		isDragging = true;
-		GetCursorPos(&dragStartPos);
+		me->isDragging = true;
+		GetCursorPos(&me->dragStartPos);
 		RECT rect;
 		GetWindowRect(hwnd, &rect);
-		windowStartPos.x = rect.left;
-		windowStartPos.y = rect.top;
+		me->windowStartPos.x = rect.left;
+		me->windowStartPos.y = rect.top;
 		return;
 	}
 	else if (dreMove == event)
 	{
-		if (!isDragging)
+		if (!me->isDragging)
 			return;
 
 		POINT dragPos = {};
 		GetCursorPos(&dragPos);
 		// move window
-		int newX = dragPos.x - dragStartPos.x + windowStartPos.x;
-		int newY = dragPos.y - dragStartPos.y + windowStartPos.y;
+		int newX = dragPos.x - me->dragStartPos.x + me->windowStartPos.x;
+		int newY = dragPos.y - me->dragStartPos.y + me->windowStartPos.y;
 		SetWindowPos(hwnd, NULL, newX, newY, 0, 0, SWP_NOSIZE);
 		return;
 	}
@@ -160,29 +170,18 @@ void DragHandler(HWND hwnd, DragResizeEvent event)
 
 void ResizeHandler(HWND hwnd, DragResizeEvent event)
 {
-	static bool isFullscreen = false;
-	static bool isResizing = false;
-	static POINT dragStartPos = {};
-	static POINT windowStartSize = {};
+	OledSaverWinState *me = (OledSaverWinState *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	if (!me)
+		return;
 
 	if (dreStop == event)
 	{
-		isResizing = false;
-		return;
-	}
-	else if (dreFullscreenOn == event)
-	{
-		isFullscreen = true;
-		return;
-	}
-	else if (dreFullscreenOff == event)
-	{
-		isFullscreen = false;
+		me->isResizing = false;
 		return;
 	}
 	else if (dreStart == event)
 	{
-		if (isFullscreen)
+		if (me->isFullscreen)
 			return;
 
 		short shiftState = GetKeyState(VK_SHIFT);
@@ -190,26 +189,26 @@ void ResizeHandler(HWND hwnd, DragResizeEvent event)
 		if (!(shiftState & 0x8000) && !(controlState & 0x8000))
 			return; // no shift or control -> dragging, not resizing
 
-		isResizing = true;
-		GetCursorPos(&dragStartPos);
+		me->isResizing = true;
+		GetCursorPos(&me->dragStartPos);
 		RECT rect;
 		GetWindowRect(hwnd, &rect);
-		windowStartSize.x = rect.right - rect.left;
-		windowStartSize.y = rect.bottom - rect.top;
+		me->windowStartSize.x = rect.right - rect.left;
+		me->windowStartSize.y = rect.bottom - rect.top;
 		return;
 	}
 	else if (dreMove == event)
 	{
-		if (!isResizing)
+		if (!me->isResizing)
 			return;
 
 		POINT dragPos = {};
 		GetCursorPos(&dragPos);
 		// resize window
-		int newWidth = dragPos.x - dragStartPos.x + windowStartSize.x;
+		int newWidth = dragPos.x - me->dragStartPos.x + me->windowStartSize.x;
 		if (newWidth < 100)
 			newWidth = 100;
-		int newHeight = dragPos.y - dragStartPos.y + windowStartSize.y;
+		int newHeight = dragPos.y - me->dragStartPos.y + me->windowStartSize.y;
 		if (newHeight < 100)
 			newHeight = 100;
 		SetWindowPos(hwnd, HWND_TOP, 0, 0, newWidth, newHeight, SWP_NOZORDER | SWP_NOMOVE);
@@ -218,25 +217,46 @@ void ResizeHandler(HWND hwnd, DragResizeEvent event)
 
 void FullscreenHandler(HWND hwnd, WPARAM wParam)
 {
-	static bool isFullscreen = false;
-	static WINDOWPLACEMENT wpPrev = {sizeof(wpPrev)};
+	OledSaverWinState *me = (OledSaverWinState *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	if (!me)
+		return;
+
+	// if number key (upper row, or numpad) is pressed, then monitor off
+	int delaySeconds = 0;
+	if (wParam >= '0' && wParam <= '9') //|| (wParam >= VK_NUMPAD0 && wParam <= VK_NUMPAD9))
+		delaySeconds = (wParam - '0') + 1;
+
+	if (wParam >= VK_NUMPAD0 && wParam <= VK_NUMPAD9)
+		delaySeconds = (wParam - VK_NUMPAD0) + 1;
+
+	// PgDn or arrow down, then monitor off
+	if ((VK_NEXT == wParam) || (VK_DOWN == wParam))
+		delaySeconds = 1;
+
+	if (0 != delaySeconds)
+	{
+		SetTimer(hwnd, nIdOffTimer, delaySeconds * 1000, NULL);
+		if (!me->isFullscreen)
+			ShowWindow(hwnd, SW_MINIMIZE);
+		return;
+	}
 
 	// handle escape and enter keys only
 	if ((VK_RETURN != wParam) && (VK_ESCAPE != wParam))
 		return;
 
-	if ((VK_ESCAPE == wParam) && !isFullscreen)
+	if ((VK_ESCAPE == wParam) && (!me->isFullscreen))
 	{
-		// if not full screen, then close window
-		PostMessage(hwnd, WM_CLOSE, 0, 0);
+		// if not full screen, then minimize window to taskbar
+		ShowWindow(hwnd, SW_MINIMIZE);
 		return;
 	}
 
 	// otherwise, toggle
-	if (!isFullscreen)
+	if (!me->isFullscreen)
 	{
 		MONITORINFO mi = {sizeof(mi)};
-		if (!GetWindowPlacement(hwnd, &wpPrev) || !GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi))
+		if (!GetWindowPlacement(hwnd, &me->wpPrev) || !GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi))
 			return;
 
 		SetWindowPos(hwnd, HWND_TOP,
@@ -247,20 +267,16 @@ void FullscreenHandler(HWND hwnd, WPARAM wParam)
 
 		// and hide mouse coursor
 		ShowCursor(false);
-		isFullscreen = true;
-		DragHandler(hwnd, dreFullscreenOn);
-		ResizeHandler(hwnd, dreFullscreenOn);
+		me->isFullscreen = true;
 	}
 	else
 	{
-		SetWindowPlacement(hwnd, &wpPrev);
+		SetWindowPlacement(hwnd, &me->wpPrev);
 		SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
 					 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
 						 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 		ShowCursor(true);
-		isFullscreen = false;
-		DragHandler(hwnd, dreFullscreenOff);
-		ResizeHandler(hwnd, dreFullscreenOff);
+		me->isFullscreen = false;
 	}
 }
 
@@ -275,6 +291,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		FullscreenHandler(hWnd, VK_RETURN); // emulate enter hit
 		break;
 	case WM_KEYDOWN:
+		DragHandler(hWnd, dreStop);
+		ResizeHandler(hWnd, dreStop);
 		FullscreenHandler(hWnd, wParam);
 		break;
 	case WM_LBUTTONDOWN:
@@ -291,6 +309,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		DragHandler(hWnd, dreMove);
 		ResizeHandler(hWnd, dreMove);
 		break;
+	case WM_TIMER:
+	{
+		if (wParam == nIdOffTimer)
+		{
+			PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+			KillTimer(hWnd, nIdOffTimer);
+		}
+	}
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
 		// TODO: Add any drawing code here...
